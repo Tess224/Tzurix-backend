@@ -12,6 +12,7 @@ from .coding import CodingArenaEngine
 __all__ = [
     'BaseArenaEngine',
     'ArenaResult',
+    'ArenaOrchestrator',
     'SandboxExecutor',
     'MockSandbox',
     'ExecutionResult',
