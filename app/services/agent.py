@@ -337,13 +337,16 @@ class AgentService:
             'efficiency_score': agent.efficiency_score,
             'autonomy_score': agent.autonomy_score,
             
-            # Interface status
-            'has_interface': bool(agent.interface_code),
-            'interface_validated': agent.interface_validated or False,
+            # GitHub interface status
+            'has_github': bool(agent.github_repo_url),
+            'github_validated': agent.github_validated or False,
+            'github_repo_url': agent.github_repo_url,
+            'github_branch': agent.github_branch,
+            'github_entry_file': agent.github_entry_file,
+            'github_last_commit': agent.github_last_commit,
             
             # Social links
             'twitter_handle': agent.twitter_handle,
-            'github_url': agent.github_url,
             'website_url': agent.website_url,
             
             # Arena info
