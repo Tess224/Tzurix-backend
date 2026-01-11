@@ -52,12 +52,13 @@ class Agent(db.Model):
     # V1: Tier system
     tier = db.Column(db.String(10), default='alpha')
     
-    # V1: Decision interface for arena testing
-    interface_type = db.Column(db.String(20))
-    interface_code = db.Column(db.Text)
-    interface_version = db.Column(db.Integer, default=1)
-    interface_validated = db.Column(db.Boolean, default=False)
-    interface_updated_at = db.Column(db.DateTime)
+    # V1: GitHub-based decision interface
+    github_repo_url = db.Column(db.String(255))  # https://github.com/user/repo
+    github_branch = db.Column(db.String(100), default='main')
+    github_entry_file = db.Column(db.String(255), default='agent.py')
+    github_validated = db.Column(db.Boolean, default=False)
+    github_last_commit = db.Column(db.String(40))  # Short SHA
+    github_last_validated_at = db.Column(db.DateTime)
     
     # V1: UPI breakdown (for utility/coding arenas)
     effectiveness_score = db.Column(db.Float)
@@ -70,7 +71,6 @@ class Agent(db.Model):
     
     # V1: Social links
     twitter_handle = db.Column(db.String(50))
-    github_url = db.Column(db.String(200))
     website_url = db.Column(db.String(200))
     
     # Token data
