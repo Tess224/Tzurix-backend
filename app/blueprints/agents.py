@@ -221,40 +221,135 @@ def change_agent_tier(agent_id):
     })
 
 
-@agents_bp.route('/<int:agent_id>/interface', methods=['POST'])
-def upload_agent_interface(agent_id):
+@agents_bp.route('/<int:agent_id>/github', methods=['POST'])
+def set_agent_github(agent_id):
     """
-    Upload decision interface code for arena testing.
+    Set or update an agent's GitHub repository.
     
     Request body:
     {
-        "creator_wallet": "CreatorWalletAddress",
-        "interface_code": "def decide(market_data, portfolio):\\n    ...",
-        "interface_type": "simple"
+        "github_repo_url": "https://github.com/user/repo",
+        "github_branch": "main",
+        "github_entry_file": "agent.py",
+        "creator_wallet": "CreatorWalletAddress"
     }
     """
+    from app.services.github import GitHubService
+    
+    agent = Agent.query.get(agent_id)
+    if not agent:
+        return jsonify({'success': False, 'error': 'Agent not found'}), 404
+    
     data = request.get_json()
     
-    creator_wallet = data.get('creator_wallet')
-    interface_code = data.get('interface_code')
-    interface_type = data.get('interface_type', 'simple')
+    # Verify creator
+    if data.get('creator_wallet') != agent.creator_wallet:
+        return jsonify({'success': False, 'error': 'Only the creator can update GitHub settings'}), 403
     
-    if not creator_wallet:
-        return jsonify({'success': False, 'error': 'Missing creator_wallet'}), 400
-    if not interface_code:
-        return jsonify({'success': False, 'error': 'Missing interface_code'}), 400
+    github_repo_url = data.get('github_repo_url')
+    if not github_repo_url:
+        return jsonify({'success': False, 'error': 'github_repo_url is required'}), 400
     
-    result = AgentService.update_interface(
-        agent_id, creator_wallet, interface_code, interface_type
-    )
+    if not github_repo_url.startswith('https://github.com/'):
+        return jsonify({'success': False, 'error': 'Invalid GitHub URL'}), 400
     
-    if not result['success']:
-        status_code = 403 if 'authorized' in result['error'] else 400
-        return jsonify(result), status_code
+    github_branch = data.get('github_branch', 'main')
+    github_entry_file = data.get('github_entry_file', 'agent.py')
+    
+    # Fetch and validate
+    fetch_result = GitHubService.fetch_file(github_repo_url, github_branch, github_entry_file)
+    
+    if not fetch_result['success']:
+        return jsonify({
+            'success': False,
+            'error': f'Could not fetch from GitHub: {fetch_result["error"]}'
+        }), 400
+    
+    # Validate code
+    validation = GitHubService.validate_code(fetch_result['content'], agent.arena_type)
+    
+    # Update agent
+    agent.github_repo_url = github_repo_url
+    agent.github_branch = github_branch
+    agent.github_entry_file = github_entry_file
+    agent.github_validated = validation['valid']
+    agent.github_last_commit = fetch_result.get('commit_sha')
+    agent.github_last_validated_at = datetime.utcnow()
+    
+    db.session.commit()
     
     return jsonify({
-        **result,
-        'next_step': 'Interface will be validated and tested in the next arena run'
+        'success': True,
+        'message': 'GitHub repository connected',
+        'validation': validation,
+        'agent': AgentService.agent_to_dict(agent)
+    })
+
+
+@agents_bp.route('/<int:agent_id>/github/validate', methods=['GET'])
+def validate_agent_github(agent_id):
+    """Re-validate an agent's GitHub repository."""
+    from app.services.github import GitHubService
+    
+    agent = Agent.query.get(agent_id)
+    if not agent:
+        return jsonify({'success': False, 'error': 'Agent not found'}), 404
+    
+    if not agent.github_repo_url:
+        return jsonify({'success': False, 'error': 'No GitHub repository configured'}), 400
+    
+    fetch_result = GitHubService.fetch_file(
+        agent.github_repo_url,
+        agent.github_branch or 'main',
+        agent.github_entry_file or 'agent.py'
+    )
+    
+    if not fetch_result['success']:
+        return jsonify({'success': False, 'error': fetch_result['error']}), 400
+    
+    validation = GitHubService.validate_code(fetch_result['content'], agent.arena_type)
+    
+    agent.github_validated = validation['valid']
+    agent.github_last_commit = fetch_result.get('commit_sha')
+    agent.github_last_validated_at = datetime.utcnow()
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'validation': validation
+    })
+
+
+@agents_bp.route('/<int:agent_id>/github/preview', methods=['GET'])
+def preview_agent_github(agent_id):
+    """Preview code from an agent's GitHub repository (first 100 lines)."""
+    from app.services.github import GitHubService
+    
+    agent = Agent.query.get(agent_id)
+    if not agent:
+        return jsonify({'success': False, 'error': 'Agent not found'}), 404
+    
+    if not agent.github_repo_url:
+        return jsonify({'success': False, 'error': 'No GitHub repository configured'}), 400
+    
+    fetch_result = GitHubService.fetch_file(
+        agent.github_repo_url,
+        agent.github_branch or 'main',
+        agent.github_entry_file or 'agent.py'
+    )
+    
+    if not fetch_result['success']:
+        return jsonify({'success': False, 'error': fetch_result['error']}), 400
+    
+    lines = fetch_result['content'].split('\n')
+    preview = '\n'.join(lines[:100])
+    
+    return jsonify({
+        'success': True,
+        'preview': preview,
+        'truncated': len(lines) > 100,
+        'total_lines': len(lines),
+        'commit': fetch_result.get('commit_sha')
     })
 
 
