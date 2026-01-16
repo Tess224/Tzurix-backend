@@ -9,6 +9,7 @@ from app.models import Agent
 from app.config import get_tier_config, VALID_AGENT_TYPES, ARENA_TYPES
 from app.services.agent import AgentService, CreateAgentRequest
 from app.services.pricing import PricingService
+from datetime import datetime
 
 agents_bp = Blueprint('agents', __name__, url_prefix='/api/agents')
 
