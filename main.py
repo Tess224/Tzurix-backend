@@ -49,6 +49,74 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =============================================================================
+# MOCK SCORING HELPERS
+# =============================================================================
+
+def generate_mock_score_change(agent_type: str, current_score: float) -> float:
+    """Generate realistic mock score change for demo."""
+    volatility = {
+        'trading': 2.5,
+        'defi': 2.0,
+        'social': 1.5,
+        'utility': 1.0,
+        'coding': 1.2,
+    }.get(agent_type, 1.5)
+    
+    base = random.gauss(0.3, volatility)
+    change = max(-4.0, min(4.0, base))
+    
+    if current_score > 70:
+        change -= random.uniform(0.5, 1.5)
+    elif current_score < 25:
+        change += random.uniform(0.5, 1.5)
+    
+    return round(change, 2)
+
+
+def generate_mock_arena_result(agent) -> dict:
+    """Generate realistic mock arena result for demo."""
+    arena_type = agent.arena_type or 'trading'
+    base_perf = random.gauss(55, 20)
+    base_perf = max(10, min(95, base_perf))
+    
+    if arena_type == 'trading':
+        return {
+            'score': round(base_perf, 1),
+            'raw_score': round(base_perf + random.uniform(-5, 5), 1),
+            'effectiveness': None,
+            'efficiency': None,
+            'autonomy': None,
+            'templates_run': ['momentum_bull', 'mean_reversion', 'high_volatility'],
+            'template_scores': {
+                'momentum_bull': round(random.uniform(40, 90), 1),
+                'mean_reversion': round(random.uniform(40, 90), 1),
+                'high_volatility': round(random.uniform(30, 85), 1),
+            },
+            'execution_time_ms': random.randint(150, 800),
+            'errors': [],
+        }
+    else:
+        effectiveness = round(random.uniform(40, 95), 1)
+        efficiency = round(random.uniform(40, 95), 1)
+        autonomy = round(random.uniform(40, 95), 1)
+        upi = effectiveness * 0.5 + efficiency * 0.3 + autonomy * 0.2
+        return {
+            'score': round(upi, 1),
+            'raw_score': round(upi, 1),
+            'effectiveness': effectiveness,
+            'efficiency': efficiency,
+            'autonomy': autonomy,
+            'templates_run': ['task_completion', 'error_handling', 'resource_usage'],
+            'template_scores': {
+                'task_completion': effectiveness,
+                'error_handling': efficiency,
+                'resource_usage': autonomy,
+            },
+            'execution_time_ms': random.randint(200, 1200),
+            'errors': [],
+                                 }
+
+# =============================================================================
 # APP FACTORY
 # =============================================================================
 
