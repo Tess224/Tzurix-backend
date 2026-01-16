@@ -196,8 +196,9 @@ scheduler = None
 
 
 def scheduled_tiered_score_update():
-    """Tiered score updates based on trading activity."""
-    from app.models import Agent
+    """Tiered score updates with mock fallback."""
+    from app.models import db, Agent, ScoreHistory
+    from app.services.scoring import ScoringService
     from app.services.pricing import PricingService
     
     with app.app_context():
@@ -208,38 +209,61 @@ def scheduled_tiered_score_update():
             all_agents = Agent.query.filter_by(is_active=True).all()
             
             for agent in all_agents:
-                should_update = False
-                
-                last_trade = agent.last_trade_at or datetime(2000, 1, 1)
-                last_update = agent.last_score_update or datetime(2000, 1, 1)
-                
-                hours_since_trade = (now - last_trade).total_seconds() / 3600
-                minutes_since_update = (now - last_update).total_seconds() / 60
-                
-                if hours_since_trade <= 1:
-                    should_update = True
-                    tier = "HOT"
-                elif hours_since_trade <= 24:
-                    should_update = minutes_since_update >= 10
-                    tier = "ACTIVE"
-                else:
-                    should_update = minutes_since_update >= 60
-                    tier = "IDLE"
-                
-                if should_update:
-                    # Arena-based scoring handles score updates via scheduled_arena_run()
-                    # Wallet-based on-chain scoring (Helius) not yet implemented
-                    pass
-                
-                import time
-                time.sleep(0.5)
+                try:
+                    # Check if real scoring available
+                    real_scoring_available = (
+                        getattr(agent, 'github_validated', False) and
+                        getattr(agent, 'github_repo_url', None) and
+                        False  # Set True when real sandbox exists
+                    )
+                    
+                    if real_scoring_available:
+                        continue  # Skip - handled by real arena
+                    
+                    # Generate mock score change
+                    raw_change = generate_mock_score_change(
+                        agent.type or 'trading',
+                        agent.current_score
+                    )
+                    
+                    # Apply V1 scoring (±5 cap, tier ceiling)
+                    result = ScoringService.apply_v1_score_change(
+                        current_score=agent.current_score,
+                        raw_change=raw_change,
+                        tier=agent.tier or 'alpha'
+                    )
+                    
+                    # Update agent
+                    agent.previous_score = agent.current_score
+                    agent.current_score = result.new_score
+                    agent.was_capped = result.was_capped
+                    agent.last_score_update = now
+                    
+                    # Save to history
+                    price_data = PricingService.calculate_price(result.new_score)
+                    history = ScoreHistory(
+                        agent_id=agent.id,
+                        score=result.new_score,
+                        raw_score=agent.current_score + raw_change,
+                        price_usd=price_data.price_usd,
+                        price_sol=price_data.price_sol
+                    )
+                    db.session.add(history)
+                    updated_count += 1
+                    
+                    logger.info(f"[Scheduler] 🎭 {agent.name}: {agent.previous_score:.1f} → {result.new_score:.1f} (mock)")
+                    
+                except Exception as e:
+                    logger.error(f"[Scheduler] Error updating {agent.name}: {e}")
+                    continue
             
             db.session.commit()
-            logger.info(f"[Scheduler] Tiered update complete: {updated_count}/{len(all_agents)} agents updated")
+            logger.info(f"[Scheduler] Tiered update complete: {updated_count}/{len(all_agents)} agents")
             
         except Exception as e:
             logger.error(f"[Scheduler] Tiered update error: {e}")
             db.session.rollback()
+        
 
 
 def scheduled_daily_weight_reset():
