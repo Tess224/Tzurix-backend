@@ -158,23 +158,10 @@ def scheduled_tiered_score_update():
                     should_update = minutes_since_update >= 60
                     tier = "IDLE"
                 
-                if should_update and agent.wallet_address:
-                    try:
-                        from scoring_engine import calculate_agent_score, HELIUS_API_KEY
-                        if HELIUS_API_KEY:
-                            result = calculate_agent_score(
-                                wallet_address=agent.wallet_address,
-                                previous_score=agent.current_score
-                            )
-                            if result:
-                                agent.previous_score = agent.current_score
-                                agent.raw_score = result.raw_score
-                                agent.current_score = result.final_score
-                                agent.was_capped = result.capped
-                                agent.last_score_update = now
-                                updated_count += 1
-                    except Exception as e:
-                        logger.error(f"[Scheduler] Error updating {agent.name}: {e}")
+                if should_update:
+                    # Arena-based scoring handles score updates via scheduled_arena_run()
+                    # Wallet-based on-chain scoring (Helius) not yet implemented
+                    pass
                 
                 import time
                 time.sleep(0.5)
