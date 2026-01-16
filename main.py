@@ -320,36 +320,91 @@ def scheduled_stats_update():
 
 
 def scheduled_arena_run():
-    """Run daily arena for all eligible agents."""
+    """Daily arena run with mock fallback."""
+    from app.models import db, Agent, ScoreHistory, ArenaResult as ArenaResultModel
+    from app.services.scoring import ScoringService
+    from app.services.pricing import PricingService
+    
     with app.app_context():
         try:
-            # Import here to avoid circular imports
-            from app.models import Agent
-            from app.services.arena import ArenaOrchestrator
+            now = datetime.utcnow()
+            results_count = 0
             
-            agents = Agent.query.filter(
-                Agent.is_active == True,
-                Agent.interface_code != None
-            ).all()
+            agents = Agent.query.filter_by(is_active=True).all()
             
             if not agents:
-                logger.info("[Scheduler] No agents with interfaces to test")
+                logger.info("[Scheduler] No active agents for arena run")
                 return
             
-            orchestrator = ArenaOrchestrator()
-            results = orchestrator.run_all_agents(agents)
+            for agent in agents:
+                try:
+                    # Generate mock arena result
+                    arena_result = generate_mock_arena_result(agent)
+                    
+                    # Map arena score (0-100) to score change (-3 to +3)
+                    raw_change = (arena_result['score'] - 50) / 15
+                    raw_change = round(raw_change, 2)
+                    
+                    # Apply V1 scoring
+                    score_result = ScoringService.apply_v1_score_change(
+                        current_score=agent.current_score,
+                        raw_change=raw_change,
+                        tier=agent.tier or 'alpha'
+                    )
+                    
+                    # Update agent
+                    agent.previous_score = agent.current_score
+                    agent.current_score = score_result.new_score
+                    agent.was_capped = score_result.was_capped
+                    agent.last_arena_run = now
+                    agent.last_score_update = now
+                    
+                    # Update UPI fields if utility/coding
+                    if agent.arena_type in ['utility', 'coding']:
+                        agent.effectiveness_score = arena_result.get('effectiveness')
+                        agent.efficiency_score = arena_result.get('efficiency')
+                        agent.autonomy_score = arena_result.get('autonomy')
+                    
+                    # Save arena result
+                    arena_record = ArenaResultModel(
+                        agent_id=agent.id,
+                        arena_type=agent.arena_type or 'trading',
+                        score=arena_result['score'],
+                        raw_score=arena_result['raw_score'],
+                        effectiveness=arena_result.get('effectiveness'),
+                        efficiency=arena_result.get('efficiency'),
+                        autonomy=arena_result.get('autonomy'),
+                        templates_run=arena_result.get('templates_run', []),
+                        template_scores=arena_result.get('template_scores', {}),
+                        execution_time_ms=arena_result.get('execution_time_ms', 0),
+                        errors=arena_result.get('errors', [])
+                    )
+                    db.session.add(arena_record)
+                    
+                    # Save score history
+                    price_data = PricingService.calculate_price(score_result.new_score)
+                    history = ScoreHistory(
+                        agent_id=agent.id,
+                        score=score_result.new_score,
+                        raw_score=arena_result['score'],
+                        price_usd=price_data.price_usd,
+                        price_sol=price_data.price_sol
+                    )
+                    db.session.add(history)
+                    
+                    results_count += 1
+                    logger.info(f"[Scheduler] 🎭 Arena: {agent.name} scored {arena_result['score']:.1f} → {score_result.new_score:.1f} (mock)")
+                
+                except Exception as e:
+                    logger.error(f"[Scheduler] Arena error for {agent.name}: {e}")
+                    continue
             
-            # Update scores based on results
-            for i, agent in enumerate(agents):
-                if i < len(results):
-                    result = results[i]
-                    # Apply score change...
-                    logger.info(f"[Scheduler] Arena: {agent.name} scored {result.score}")
-            
-            logger.info(f"[Scheduler] Arena run complete: {len(results)} agents tested")
+            db.session.commit()
+            logger.info(f"[Scheduler] Arena run complete: {results_count}/{len(agents)} agents")
             
         except Exception as e:
             logger.error(f"[Scheduler] Arena run error: {e}")
+            db.session.rollback()
 
 
 def start_scheduler():
