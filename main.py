@@ -24,7 +24,7 @@ ARCHITECTURE:
 import os
 import logging
 import random
-from datetime import datetime
+from datetime import datetime, timedelta 
 from flask import Flask
 from flask_cors import CORS
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -251,7 +251,6 @@ scheduler = None
 
 
 def scheduled_tiered_score_update():
-    """Tiered score updates with mock fallback."""
     from app.models import db, Agent, ScoreHistory
     from app.services.scoring import ScoringService
     from app.services.pricing import PricingService
@@ -260,65 +259,42 @@ def scheduled_tiered_score_update():
         try:
             now = datetime.utcnow()
             updated_count = 0
-            
             all_agents = Agent.query.filter_by(is_active=True).all()
             
             for agent in all_agents:
                 try:
-                    # Check if real scoring available
-                    real_scoring_available = (
-                        getattr(agent, 'github_validated', False) and
-                        getattr(agent, 'github_repo_url', None) and
-                        False  # Set True when real sandbox exists
-                    )
+                    raw_change = generate_mock_score_change(agent.type or 'trading', agent.current_score)
+                    result = ScoringService.apply_v1_score_change(agent.current_score, raw_change, agent.tier or 'alpha')
                     
-                    if real_scoring_available:
-                        continue  # Skip - handled by real arena
-                    
-                    # Generate mock score change
-                    raw_change = generate_mock_score_change(
-                        agent.type or 'trading',
-                        agent.current_score
-                    )
-                    
-                    # Apply V1 scoring (±5 cap, tier ceiling)
-                    result = ScoringService.apply_v1_score_change(
-                        current_score=agent.current_score,
-                        raw_change=raw_change,
-                        tier=agent.tier or 'alpha'
-                    )
-                    
-                    # Update agent
                     agent.previous_score = agent.current_score
                     agent.current_score = result.new_score
                     agent.was_capped = result.was_capped
                     agent.last_score_update = now
                     
-                    # Save to history
+                    # Update holders
+                    if (agent.holders or 0) == 0:
+                        agent.holders = random.randint(5, 25)
+                    else:
+                        agent.holders = generate_mock_holder_count(agent.holders, result.new_score)
+                    
+                    # Update volume
+                    agent.volume_24h = generate_mock_volume(result.new_score, agent.holders)
+                    agent.total_volume = (agent.total_volume or 0) + (agent.volume_24h * 0.1)
+                    
+                    # Save history
                     price_data = PricingService.calculate_price(result.new_score)
-                    history = ScoreHistory(
-                        agent_id=agent.id,
-                        score=result.new_score,
-                        raw_score=agent.current_score + raw_change,
-                        price_usd=price_data.price_usd,
-                        price_sol=price_data.price_sol
-                    )
+                    history = ScoreHistory(agent_id=agent.id, score=result.new_score, raw_score=result.new_score + raw_change, price_usd=price_data.price_usd, price_sol=price_data.price_sol)
                     db.session.add(history)
                     updated_count += 1
-                    
-                    logger.info(f"[Scheduler] 🎭 {agent.name}: {agent.previous_score:.1f} → {result.new_score:.1f} (mock)")
-                    
+                    logger.info(f"[Scheduler] 🎭 {agent.name}: {agent.previous_score:.1f} → {result.new_score:.1f} | Holders: {agent.holders} | Vol: ${agent.volume_24h:.0f}")
                 except Exception as e:
                     logger.error(f"[Scheduler] Error updating {agent.name}: {e}")
-                    continue
             
             db.session.commit()
             logger.info(f"[Scheduler] Tiered update complete: {updated_count}/{len(all_agents)} agents")
-            
         except Exception as e:
             logger.error(f"[Scheduler] Tiered update error: {e}")
             db.session.rollback()
-        
 
 
 def scheduled_daily_weight_reset():
@@ -375,7 +351,6 @@ def scheduled_stats_update():
 
 
 def scheduled_arena_run():
-    """Daily arena run with mock fallback."""
     from app.models import db, Agent, ScoreHistory, ArenaResult as ArenaResultModel
     from app.services.scoring import ScoringService
     from app.services.pricing import PricingService
@@ -384,83 +359,41 @@ def scheduled_arena_run():
         try:
             now = datetime.utcnow()
             results_count = 0
-            
             agents = Agent.query.filter_by(is_active=True).all()
-            
-            if not agents:
-                logger.info("[Scheduler] No active agents for arena run")
-                return
             
             for agent in agents:
                 try:
-                    # Generate mock arena result
                     arena_result = generate_mock_arena_result(agent)
+                    raw_change = round((arena_result['score'] - 50) / 15, 2)
+                    score_result = ScoringService.apply_v1_score_change(agent.current_score, raw_change, agent.tier or 'alpha')
                     
-                    # Map arena score (0-100) to score change (-3 to +3)
-                    raw_change = (arena_result['score'] - 50) / 15
-                    raw_change = round(raw_change, 2)
-                    
-                    # Apply V1 scoring
-                    score_result = ScoringService.apply_v1_score_change(
-                        current_score=agent.current_score,
-                        raw_change=raw_change,
-                        tier=agent.tier or 'alpha'
-                    )
-                    
-                    # Update agent
                     agent.previous_score = agent.current_score
                     agent.current_score = score_result.new_score
                     agent.was_capped = score_result.was_capped
                     agent.last_arena_run = now
                     agent.last_score_update = now
                     
-                    # Update UPI fields if utility/coding
-                    if agent.arena_type in ['utility', 'coding']:
+                    if getattr(agent, 'arena_type', 'trading') in ['utility', 'coding']:
                         agent.effectiveness_score = arena_result.get('effectiveness')
                         agent.efficiency_score = arena_result.get('efficiency')
                         agent.autonomy_score = arena_result.get('autonomy')
                     
-                    # Save arena result
-                    arena_record = ArenaResultModel(
-                        agent_id=agent.id,
-                        arena_type=agent.arena_type or 'trading',
-                        score=arena_result['score'],
-                        raw_score=arena_result['raw_score'],
-                        effectiveness=arena_result.get('effectiveness'),
-                        efficiency=arena_result.get('efficiency'),
-                        autonomy=arena_result.get('autonomy'),
-                        templates_run=arena_result.get('templates_run', []),
-                        template_scores=arena_result.get('template_scores', {}),
-                        execution_time_ms=arena_result.get('execution_time_ms', 0),
-                        errors=arena_result.get('errors', [])
-                    )
+                    arena_record = ArenaResultModel(agent_id=agent.id, arena_type=getattr(agent, 'arena_type', 'trading') or 'trading', score=arena_result['score'], raw_score=arena_result['raw_score'], effectiveness=arena_result.get('effectiveness'), efficiency=arena_result.get('efficiency'), autonomy=arena_result.get('autonomy'), templates_run=arena_result.get('templates_run', []), template_scores=arena_result.get('template_scores', {}), execution_time_ms=arena_result.get('execution_time_ms', 0), errors=arena_result.get('errors', []))
                     db.session.add(arena_record)
                     
-                    # Save score history
                     price_data = PricingService.calculate_price(score_result.new_score)
-                    history = ScoreHistory(
-                        agent_id=agent.id,
-                        score=score_result.new_score,
-                        raw_score=arena_result['score'],
-                        price_usd=price_data.price_usd,
-                        price_sol=price_data.price_sol
-                    )
+                    history = ScoreHistory(agent_id=agent.id, score=score_result.new_score, raw_score=arena_result['score'], price_usd=price_data.price_usd, price_sol=price_data.price_sol)
                     db.session.add(history)
-                    
                     results_count += 1
-                    logger.info(f"[Scheduler] 🎭 Arena: {agent.name} scored {arena_result['score']:.1f} → {score_result.new_score:.1f} (mock)")
-                
+                    logger.info(f"[Scheduler] 🏟️ Arena: {agent.name} scored {arena_result['score']:.1f} → {score_result.new_score:.1f}")
                 except Exception as e:
                     logger.error(f"[Scheduler] Arena error for {agent.name}: {e}")
-                    continue
             
             db.session.commit()
             logger.info(f"[Scheduler] Arena run complete: {results_count}/{len(agents)} agents")
-            
         except Exception as e:
             logger.error(f"[Scheduler] Arena run error: {e}")
             db.session.rollback()
-
 
 def start_scheduler():
     """Initialize and start the background scheduler."""
