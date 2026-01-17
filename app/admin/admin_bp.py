@@ -12,7 +12,8 @@ To disable: Don't register this blueprint (see main.py)
 """
 
 from flask import Blueprint, jsonify, request
-from datetime import datetime
+import random
+from datetime import datetime, timedelta
 from threading import Thread
 import logging
 
@@ -302,7 +303,101 @@ def admin_scheduler_status():
         'jobs': jobs
     })
 
-
+@admin_bp.route('/init-demo-data', methods=['POST'])
+def init_all_demo_data():
+    """Initialize all demo data for all agents."""
+    if not verify_admin_key():
+        return jsonify({'success': False, 'error': 'Unauthorized'}), 401
+    
+    import random
+    from datetime import datetime, timedelta
+    from app.models import db, Agent, ScoreHistory, Trade
+    from app.services.pricing import PricingService
+    
+    agents = Agent.query.filter_by(is_active=True).all()
+    now = datetime.utcnow()
+    results = []
+    
+    for agent in agents:
+        # Clear existing history
+        ScoreHistory.query.filter_by(agent_id=agent.id).delete()
+        
+        # Generate 30 days of score history
+        current_score = agent.current_score or 20.0
+        scores = [current_score]
+        
+        for i in range(29):
+            change = random.gauss(0, 2.5)
+            change = max(-4.5, min(4.5, change))
+            prev_score = scores[-1] - change
+            prev_score = max(5, min(75, prev_score))
+            scores.append(prev_score)
+        
+        scores.reverse()
+        
+        for i, score in enumerate(scores):
+            days_ago = 30 - i - 1
+            timestamp = now - timedelta(days=days_ago, hours=random.randint(0, 12))
+            price_data = PricingService.calculate_price(score)
+            
+            history = ScoreHistory(
+                agent_id=agent.id,
+                score=round(score, 1),
+                raw_score=round(score + random.uniform(-3, 5), 1),
+                price_usd=price_data.price_usd,
+                price_sol=price_data.price_sol,
+                calculated_at=timestamp
+            )
+            db.session.add(history)
+        
+        # Generate 50 fake trades
+        for i in range(50):
+            random_hours = random.randint(0, 30 * 24)
+            trade_time = now - timedelta(hours=random_hours)
+            
+            side = random.choice(['buy', 'sell'])
+            token_amount = random.randint(100, 10000)
+            estimated_score = current_score + random.uniform(-10, 10)
+            price_per_token = estimated_score * 0.0001
+            sol_amount = (token_amount * price_per_token) / 140
+            
+            chars = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+            fake_wallet = ''.join(random.choice(chars) for _ in range(44))
+            fake_tx = ''.join(random.choice(chars) for _ in range(88))
+            
+            trade = Trade(
+                agent_id=agent.id,
+                trader_wallet=fake_wallet,
+                side=side,
+                token_amount=token_amount,
+                sol_amount=round(sol_amount, 6),
+                price_at_trade=round(price_per_token, 8),
+                score_at_trade=round(estimated_score, 1),
+                tx_signature=fake_tx,
+                created_at=trade_time
+            )
+            db.session.add(trade)
+        
+        # Set realistic stats
+        agent.holders = random.randint(15, 75)
+        agent.volume_24h = round(random.uniform(200, 2000), 2)
+        agent.total_volume = round(random.uniform(5000, 25000), 2)
+        agent.last_score_update = now
+        
+        results.append({
+            'agent_id': agent.id,
+            'name': agent.name,
+            'holders': agent.holders,
+            'volume_24h': agent.volume_24h
+        })
+    
+    db.session.commit()
+    
+    return jsonify({
+        'success': True,
+        'message': f'Initialized demo data for {len(agents)} agents',
+        'results': results
+    })
 # =============================================================================
 # DEBUG / DEV ENDPOINTS
 # =============================================================================
